@@ -1,0 +1,15 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+crash.log
+
+# Variables / secrets
+*.tfvars
+*.tfvars.json
+
+# Hidden files (ALL dot files)
+.*
+
+# Exception (IMPORTANT)
+!.gitignore
