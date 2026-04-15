@@ -91,7 +91,7 @@ jobs:
           git fetch --all
           for branch in $(git branch -r | grep 'origin/feature/' | sed 's/origin\///'); do
             echo "Syncing $branch"
-            git checkout $branch
+            git checkout -b $branch origin/$branch
             git merge origin/main || echo "Conflict in $branch"
             git push origin $branch || echo "Push failed"
           done
