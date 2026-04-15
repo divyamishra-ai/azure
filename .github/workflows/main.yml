@@ -19,6 +19,7 @@ on:
   push:
     branches:
       - main
+      - "feature/api/*"  
       - "wip/api/*"
       - "consolidate/api/*"
       - "qa/api-poc*"
@@ -26,7 +27,7 @@ on:
 
 jobs:
 
-# 🔐 Epic ID Validation
+# 🔐 Epic ID Validation (PR level)
   validate-epic-id:
     name: Validate Epic ID
     if: github.event_name == 'pull_request'
@@ -51,8 +52,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
@@ -120,22 +120,42 @@ jobs:
       - name: Build
         run: dotnet build Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj --configuration Release
 
-# 🚫 PR creation (FIXED ✅)
+# 🚫 PR creation logic (STRICT ✅)
   create-qa-pr:
     name: Auto-create PR
-    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'feature/') && contains(github.ref_name, 'EPIC-') }}
+    if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'feature/') }}
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check EPIC ID
+        id: check
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          echo "Branch: $BRANCH"
+
+          if [[ "$BRANCH" =~ EPIC-[0-9]+ ]]; then
+            echo "valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "valid=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if no EPIC
+        if: steps.check.outputs.valid == 'false'
+        run: |
+          echo "❌ No EPIC ID → PR NOT created"
+          exit 0
+
       - uses: actions/checkout@v4
+        if: steps.check.outputs.valid == 'true'
         with:
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
-          persist-credentials: false
 
       - name: Create PR
-        run: echo "PR logic executed"
+        if: steps.check.outputs.valid == 'true'
+        run: |
+          echo "✅ EPIC present → PR can be created"
 
-# 🔔 Teams Notification (FIXED ✅)
+# 🔔 Teams Notification
   notify-teams:
     name: Notify Teams
     if: always()
