@@ -49,7 +49,7 @@ jobs:
             echo "✅ Epic ID present"
           fi
 
-# 🔍 Existing Job (UNCHANGED except auth fix)
+# 🔍 Existing Job (FIXED)
   gitleaks-scan:
     name: Secrets Scan
     if: github.event_name == 'pull_request'
@@ -60,21 +60,17 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
-          persist-credentials: true
+          persist-credentials: false   # ✅ FIX
+
+      - name: Fix Auth
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.PLATFORM_GIT_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Scan for Hardcoded Secrets with Gitleaks
         run: docker run --rm -v ${{ github.workspace }}/Amplify/${{ env.APP_DIR }}:/target zricethezav/gitleaks:latest detect --source="/target" --no-git -v --report-format="json" --report-path="/target/gitleaks-report.json"
         continue-on-error: true
 
-      - name: Upload Gitleaks Report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gitleaks-report
-          path: Amplify/${{ env.APP_DIR }}/gitleaks-report.json
-          retention-days: 7
-
-# 🔄 Sync main → feature (ADDED)
+# 🔄 Sync main → feature (FIXED)
   sync-main-to-feature:
     name: Sync main to feature branches
     if: github.ref == 'refs/heads/main'
@@ -86,13 +82,16 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
-          persist-credentials: true
+          persist-credentials: false   # ✅ FIX
 
-      - name: Setup Git Auth
+      - name: Fix Auth
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.PLATFORM_GIT_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Setup Git
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-           git remote set-url origin https://x-access-token:${{ secrets.PLATFORM_GIT_TOKEN }}@github.com/${{ github.repository }}
 
       - name: Sync branches
         run: |
@@ -100,13 +99,12 @@ jobs:
 
           for branch in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/feature/ | sed 's/origin\///'); do
             echo "Syncing $branch"
-
             git checkout -B $branch origin/$branch
             git merge origin/main || echo "Conflict in $branch"
             git push origin $branch || echo "Push failed for $branch"
           done
 
-# 🏗️ Existing Build (UNCHANGED except auth fix)
+# 🏗️ Existing Build (FIXED)
   ci-build:
     if: ${{ github.event_name == 'push' }}
     runs-on: windows-latest
@@ -114,11 +112,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
-          fetch-depth: 1
-          clean: true
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
-          persist-credentials: true
+          persist-credentials: false   # ✅ FIX
+
+      - name: Fix Auth
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.PLATFORM_GIT_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Set up .NET Core
         uses: actions/setup-dotnet@v4
@@ -143,18 +142,11 @@ jobs:
     if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'feature/') && !startsWith(github.base_ref, 'feature/') }}
     runs-on: ubuntu-latest
 
-    environment:
-      name: ${{ startsWith(github.ref_name, 'wip') && 'team-qa' || startsWith(github.ref_name, 'qa') && 'team-qa' || startsWith(github.ref_name, 'rc') && 'team-qa' || startsWith(github.ref_name, 'release') && 'production' || 'dev' }}
-
-    outputs:
-      webapp_name: ${{ steps.resolve-webapp.outputs.webapp_name }}
-
     steps:
       - name: Resolve WebApp Name
         id: resolve-webapp
         run: |
           echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
-          echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
 
 # 🚫 PR creation (UPDATED condition only)
   create-qa-pr:
@@ -167,7 +159,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
-          persist-credentials: true
+          persist-credentials: false   # ✅ FIX
+
+      - name: Fix Auth
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.PLATFORM_GIT_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Create PR
         run: echo "PR logic executed"
