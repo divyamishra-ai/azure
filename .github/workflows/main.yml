@@ -1,0 +1,194 @@
+name: WebApi Build & Deploy
+
+env:
+  APP_DIR: "Amplify.WebApi.v1"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - "wip/api/*"
+      - "feature/api/*"
+      - "consolidate/api/*"
+      - "qa/api-poc*"
+      - "rc/api-poc*"
+    paths:
+      - "Amplify/Amplify.WebApi.v1/**"
+
+  push:
+    branches:
+      - main
+      - "wip/api/*"
+      - "consolidate/api/*"
+      - "qa/api-poc*"
+      - "rc/api-poc*"
+    paths:
+      - "Amplify/Amplify.WebApi.v1/**"
+
+jobs:
+
+# 🔐 Epic ID Validation
+  validate-epic-id:
+    name: Validate Epic ID
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate branch name
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          echo "Checking branch: $BRANCH"
+
+          if [[ ! "$BRANCH" =~ EPIC-[0-9]+ ]]; then
+            echo "❌ Epic ID missing (Example: EPIC-123)"
+            exit 1
+          else
+            echo "✅ Epic ID present"
+          fi
+
+# 🔍 Secret Scan
+  gitleaks-scan:
+    name: Secrets Scan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PLATFORM_GIT_TOKEN }}
+
+      - name: Scan secrets
+        run: |
+          docker run --rm -v ${{ github.workspace }}/Amplify/${{ env.APP_DIR }}:/target \
+          zricethezav/gitleaks:latest detect \
+          --source="/target" --no-git -v \
+          --report-format="json" \
+          --report-path="/target/gitleaks-report.json"
+        continue-on-error: true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: Amplify/${{ env.APP_DIR }}/gitleaks-report.json
+
+# 🔄 Sync main → feature
+  sync-main-to-feature:
+    name: Sync main to feature branches
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PLATFORM_GIT_TOKEN }}
+
+      - name: Sync branches
+        run: |
+          git fetch --all
+          for branch in $(git branch -r | grep 'origin/feature/' | sed 's/origin\///'); do
+            echo "Syncing $branch"
+            git checkout $branch
+            git merge origin/main || echo "Conflict in $branch"
+            git push origin $branch || echo "Push failed"
+          done
+
+# 🏗️ Build
+  ci-build:
+    if: github.event_name == 'push'
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PLATFORM_GIT_TOKEN }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "3.1"
+
+      - name: Build
+        run: dotnet build Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj --configuration Release
+
+      - name: Publish
+        run: dotnet publish Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj -c Release -o "${{ env.APP_DIR }}/myapp"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: .net-app
+          path: ${{ env.APP_DIR }}/myapp
+
+# 🚫 PR Creation (only if EPIC present)
+  create-qa-pr:
+    name: Auto-create PR
+    if: ${{ github.event_name == 'push' && (startsWith(github.ref_name, 'consolidate/api/') || startsWith(github.ref_name, 'qa/api-poc')) && contains(github.ref_name, 'EPIC-') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target
+        id: resolve
+        run: |
+          if [[ "${{ github.ref_name }}" == consolidate/api/* ]]; then
+            echo "target=qa/api-poc" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref_name }}" == qa/api-poc ]]; then
+            echo "target=rc/api-poc" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create PR
+        env:
+          GH_TOKEN: ${{ secrets.PLATFORM_GIT_TOKEN }}
+        run: |
+          gh pr create \
+          --base "${{ steps.resolve.outputs.target }}" \
+          --head "${{ github.ref_name }}" \
+          --title "Auto PR" \
+          --body "Auto PR from ${{ github.ref_name }}"
+
+# 🚀 Deploy
+  deploy:
+    needs: ci-build
+    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'feature/') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: .net-app
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.PLATFORM_AZURE_CREDENTIALS_DEV_AMPLIFY_DEV_SANDBOX_SP }}
+
+      - name: Deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: "your-app-name"
+          package: ./myapp
+
+# 🔔 Teams Notification
+  notify-teams:
+    name: Notify Teams
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send notification
+        run: |
+          STATUS="${{ job.status }}"
+          MSG="Repo: ${{ github.repository }} | Branch: ${{ github.ref_name }} | Status: $STATUS"
+
+          curl -H "Content-Type: application/json" \
+          -d "{\"text\": \"$MSG\"}" \
+          ${{ secrets.TEAMS_WEBHOOK_URL }}
