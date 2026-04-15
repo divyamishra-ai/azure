@@ -15,8 +15,8 @@ on:
       - "consolidate/api/*"
       - "qa/api-poc*"
       - "rc/api-poc*"
-    paths:
-      - "Amplify/Amplify.WebApi.v1/**"
+#    paths:
+#      - "Amplify/Amplify.WebApi.v1/**"
 
   push:
     branches:
@@ -25,8 +25,8 @@ on:
       - "consolidate/api/*"
       - "qa/api-poc*"
       - "rc/api-poc*"
-    paths:
-      - "Amplify/Amplify.WebApi.v1/**"
+#    paths:
+#      - "Amplify/Amplify.WebApi.v1/**"
 
 jobs:
 
