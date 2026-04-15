@@ -19,7 +19,7 @@ on:
   push:
     branches:
       - main
-      - "feature/api/*"  
+      - "feature/api/*"
       - "wip/api/*"
       - "consolidate/api/*"
       - "qa/api-poc*"
@@ -120,7 +120,7 @@ jobs:
       - name: Build
         run: dotnet build Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj --configuration Release
 
-# 🚫 PR creation logic (STRICT ✅)
+# 🚀 REAL PR CREATION (FINAL)
   create-qa-pr:
     name: Auto-create PR
     if: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'feature/') }}
@@ -150,10 +150,30 @@ jobs:
         with:
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
 
-      - name: Create PR
+      - name: Check existing PR
+        id: checkpr
         if: steps.check.outputs.valid == 'true'
         run: |
-          echo "✅ EPIC present → PR can be created"
+          PR_EXISTS=$(curl -s -H "Authorization: token ${{ secrets.PLATFORM_GIT_TOKEN }}" \
+          https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:${{ github.ref_name }} \
+          | jq length)
+
+          echo "exists=$PR_EXISTS" >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        if: steps.check.outputs.valid == 'true' && steps.checkpr.outputs.exists == '0'
+        run: |
+          echo "🚀 Creating PR..."
+
+          curl -X POST https://api.github.com/repos/${{ github.repository }}/pulls \
+          -H "Authorization: token ${{ secrets.PLATFORM_GIT_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
+          -d "{
+            \"title\": \"Auto PR: ${{ github.ref_name }} → main\",
+            \"head\": \"${{ github.ref_name }}\",
+            \"base\": \"main\",
+            \"body\": \"This PR is auto-created by GitHub Actions for EPIC branch.\"
+          }"
 
 # 🔔 Teams Notification
   notify-teams:
