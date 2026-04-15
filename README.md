@@ -1,3 +1,4 @@
 # azure
 
 # Testing
+sync test
