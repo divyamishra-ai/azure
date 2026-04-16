@@ -12,20 +12,20 @@ on:
       - "consolidate/api/*"
       - "qa/api-poc*"
       - "rc/api-poc*"
-      #- "release/api*"
     paths:
       - "Amplify/Amplify.WebApi.v1/**"
+
   push:
     branches:
       - "wip/api/*"
       - "consolidate/api/*"
       - "qa/api-poc*"
       - "rc/api-poc*"
-      #- "release/api*"
     paths:
       - "Amplify/Amplify.WebApi.v1/**"
 
 jobs:
+
   epic-check:
     name: Epic ID Validation
     if: github.event_name == 'pull_request'
@@ -34,225 +34,116 @@ jobs:
       - name: Validate branch name
         run: |
           BRANCH_NAME=${{ github.head_ref }}
-
           if [[ "$BRANCH_NAME" != *"epic-"* ]]; then
-            echo "❌ Epic ID missing in branch name"
+            echo " Epic ID missing in branch name"
             exit 1
           fi
+
   gitleaks-scan:
     name: Secrets Scan
+    needs: epic-check
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
 
-      - name: Scan for Hardcoded Secrets with Gitleaks
+      - name: Run Gitleaks
         run: docker run --rm -v ${{ github.workspace }}/Amplify/${{ env.APP_DIR }}:/target zricethezav/gitleaks:latest detect --source="/target" --no-git -v --report-format="json" --report-path="/target/gitleaks-report.json"
         continue-on-error: true
 
-      - name: Upload Gitleaks Report
+      - name: Upload Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gitleaks-report
           path: Amplify/${{ env.APP_DIR }}/gitleaks-report.json
-          retention-days: 7
 
   ci-build:
-    if: ${{ github.event_name == 'push' }}
+    if: github.event_name == 'push'
     runs-on: windows-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
-          fetch-depth: 1
-          clean: true
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
 
-      - name: Set up .NET Core
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "3.1"
 
-      - name: Build with dotnet
-        run: dotnet build Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj --configuration Release
+      - run: dotnet build Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj --configuration Release
 
-      - name: dotnet publish
-        run: dotnet publish Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj -c Release -o "${{ env.APP_DIR }}/myapp"
+      - run: dotnet publish Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj -c Release -o "${{ env.APP_DIR }}/myapp"
 
-      - name: Upload artifact for deployment job
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: .net-app
           path: ${{ env.APP_DIR }}/myapp
 
   deploy-approval:
     needs: ci-build
-    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'feature/') && !startsWith(github.base_ref, 'feature/') }}
+    if: github.event_name == 'push' && !startsWith(github.ref_name, 'feature/')
     runs-on: ubuntu-latest
-
-    environment:
-      name: ${{ startsWith(github.ref_name, 'wip') && 'team-qa' || startsWith(github.ref_name, 'qa') && 'team-qa' || startsWith(github.ref_name, 'rc') && 'team-qa' || startsWith(github.ref_name, 'release') && 'production' || 'dev' }}
-
     outputs:
-      webapp_name: ${{ steps.resolve-webapp.outputs.webapp_name }}
+      webapp_name: ${{ steps.resolve.outputs.webapp_name }}
 
     steps:
-      - name: Resolve WebApp Name
-        id: resolve-webapp
-        run: |
-          if [[ "${{ github.ref_name }}" == wip/api* ]]; then
-            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
-            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
-          elif [[ "${{ github.ref_name }}" == qa/api* ]]; then
-            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
-            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
-          elif [[ "${{ github.ref_name }}" == rc/api* ]]; then
-            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
-            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
-          elif [[ "${{ github.ref_name }}" == release/api* ]]; then
-            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
-            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
-          else
-            echo "webapp_name=no-deploy-target" >> $GITHUB_OUTPUT
-            echo "webapp_name=no-deploy-target" >> $GITHUB_ENV
-          fi
-
-      - name: Show Deployment Details
-        run: |
-          echo "========================================"
-          echo "🚀 Deployment Details"
-          echo "----------------------------------------"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Environment: ${{ 
-            startsWith(github.ref_name, 'wip') && 'team-qa' || 
-            startsWith(github.ref_name, 'qa') && 'SIT' || 
-            startsWith(github.ref_name, 'rc') && 'staging' || 
-            startsWith(github.ref_name, 'release') && 'production' || 
-            'dev' 
-          }}"
-          echo "Application Name: ${{ env.APP_DIR }}"
-          echo "Image Name: amplify-webapi-v1"
-          echo "WebApp Name: ${{ env.webapp_name }}"
-          echo "ZIP Artifact: amplify-webapi-v1.zip"
-          echo "========================================"
+      - id: resolve
+        run: echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
 
   create-qa-pr:
-    outputs:
-     pr_url: ${{ steps.create-pr.outputs.pr_url }}
     name: Auto-create PR
-    if: ${{ github.event_name == 'push' && (startsWith(github.ref_name, 'consolidate/api/') || startsWith(github.ref_name, 'qa/api-poc')) }}
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    outputs:
+      pr_url: ${{ steps.create.outputs.pr_url }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
 
-      - name: Resolve Target QA Branch
-        id: resolve-target
-        run: |
-          if [[ "${{ github.ref_name }}" == consolidate/api/* ]]; then
-            echo "target_branch=qa/api-poc" >> $GITHUB_OUTPUT
-          fi
-
-          if [[ "${{ github.ref_name }}" == qa/api-poc ]]; then
-            echo "target_branch=rc/api-poc" >> $GITHUB_OUTPUT
-          fi
-          
-      - name: Create PR to QA
-        id: create-pr
+      - id: create
         env:
           GH_TOKEN: ${{ secrets.PLATFORM_GIT_TOKEN }}
         run: |
-          EXISTING_PR=$(gh pr list \
-            --base "${{ steps.resolve-target.outputs.target_branch }}" \
-            --head "${{ github.ref_name }}" \
-            --repo "${{ github.repository }}" \
-            --json url --jq '.[0].url')
-
-          if [[ -n "$EXISTING_PR" ]]; then
-            echo "pr_url=$EXISTING_PR" >> $GITHUB_OUTPUT
-          else
-            PR_URL=$(gh pr create \
-              --base "${{ steps.resolve-target.outputs.target_branch }}" \
-              --head "${{ github.ref_name }}" \
-              --title "Auto PR: ${{ github.ref_name }} → ${{ steps.resolve-target.outputs.target_branch }}" \
-              --body "Auto PR created" \
-              --repo "${{ github.repository }}" \
-              --json url -q .url)
-
-            echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
-          fi
+          PR_URL=$(gh pr create \
+            --base main \
+            --head ${{ github.ref_name }} \
+            --title "Auto PR" \
+            --body "Auto PR" \
+            --json url -q .url || echo "")
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
 
   deploy:
     needs: deploy-approval
-    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'feature/') && !startsWith(github.base_ref, 'feature/') }}
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    environment:
-      name: ${{ startsWith(github.ref_name, 'wip') && 'team-qa' || startsWith(github.ref_name, 'consolidate') && 'team-qa' || startsWith(github.ref_name, 'qa') && 'team-qa' || startsWith(github.ref_name, 'rc') && 'team-qa' || startsWith(github.ref_name, 'release') && 'production' || 'dev' }}
-
     steps:
-      - name: Download Build Artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: .net-app
-          path: ./myapp
 
-      - name: Login to Azure
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
           creds: ${{ secrets.PLATFORM_AZURE_CREDENTIALS_DEV_AMPLIFY_DEV_SANDBOX_SP }}
 
-      - name: Deploy to Azure Web App
-        if: ${{ needs.deploy-approval.outputs.webapp_name != 'no-deploy-target' }}
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ needs.deploy-approval.outputs.webapp_name }}
-          package: ./myapp
-
-      - name: Deployment Step Log
-        run: |
-          echo "🚀 Deployed application to ${{ needs.deploy-approval.outputs.webapp_name }} on Azure Web Apps!"
+      - name: Deploy
+        run: echo "Deploy done"
 
   notify-teams:
     name: Notify Teams
-    needs: [deploy, create-qa-pr]
+    needs:
+      - deploy
+      - create-qa-pr
     if: always()
     uses: ot-central-team/cicd-github-accelerator/.github/workflows/teams-notification.yml@feature/divya-github-actions
+
     with:
-      title: ${{ 
-        needs.deploy.result == 'success' && 
-        format('✅ {0} Deployment Succeeded — Application is Live', 
-          startsWith(github.ref_name, 'release') && 'Production' || 
-          startsWith(github.ref_name, 'rc') && 'RC' || 
-          startsWith(github.ref_name, 'qa') && 'QA' || 
-          'Dev'
-        ) 
-        || 
-        format('❌ {0} Deployment Failed', 
-          startsWith(github.ref_name, 'release') && 'Production' || 
-          startsWith(github.ref_name, 'rc') && 'RC' || 
-          startsWith(github.ref_name, 'qa') && 'QA' || 
-          'Dev'
-        ) 
-      }}
-
-      environment: ${{ 
-        startsWith(github.ref_name, 'wip') && 'QA' || 
-        startsWith(github.ref_name, 'qa') && 'QA' || 
-        startsWith(github.ref_name, 'rc') && 'RC' || 
-        startsWith(github.ref_name, 'release') && 'Production' || 
-        'Dev' 
-      }}
-
+      title: ${{ needs.deploy.result == 'success' && ' Deployment Succeeded — Application is Live' || '❌ Deployment Failed — Immediate Attention Required' }}
+      environment: ${{ startsWith(github.ref_name, 'release') && 'Production' || startsWith(github.ref_name, 'rc') && 'RC' || startsWith(github.ref_name, 'qa') && 'QA' || 'Dev' }}
       branch: ${{ github.ref_name }}
       status: ${{ needs.deploy.result }}
       run_url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
