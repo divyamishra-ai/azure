@@ -47,6 +47,7 @@ jobs:
           else
             echo "Not a feature branch, skipping"
           fi
+
   gitleaks-scan:
     name: Secrets Scan
     if: github.event_name == 'pull_request'
@@ -244,3 +245,22 @@ jobs:
             git merge origin/main --no-edit || true
             git push origin $branch || true
           done
+
+  notify-teams:
+    name: Notify Teams
+    needs:
+      - deploy
+      - create-qa-pr
+    if: always()
+    uses: ot-central-team/cicd-github-accelerator/.github/workflows/teams-notification.yml@feature/divya-github-actions
+
+    with:
+      title: ${{ needs.deploy.result == 'success' && 'Deployment Success' || 'Deployment Failed' }}
+      environment: ${{ github.ref_name }}
+      branch: ${{ github.ref_name }}
+      status: ${{ needs.deploy.result }}
+      run_url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      note: PR Notification
+
+    secrets:
+      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
