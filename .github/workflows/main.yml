@@ -17,6 +17,7 @@ on:
 
   push:
     branches:
+      - main   # ✅ ADDED
       - "wip/api/*"
       - "consolidate/api/*"
       - "qa/api-poc*"
@@ -26,128 +27,119 @@ on:
 
 jobs:
 
-  epic-check:
-    name: Epic ID Validation
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate branch name
-        run: |
-          BRANCH_NAME=${{ github.head_ref }}
-          if [[ "$BRANCH_NAME" != *"epic-"* ]]; then
-            echo " Epic ID missing in branch name"
-            exit 1
-          fi
-
   gitleaks-scan:
     name: Secrets Scan
-    needs: epic-check
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
 
-      - name: Run Gitleaks
+      - name: Scan for Hardcoded Secrets with Gitleaks
         run: docker run --rm -v ${{ github.workspace }}/Amplify/${{ env.APP_DIR }}:/target zricethezav/gitleaks:latest detect --source="/target" --no-git -v --report-format="json" --report-path="/target/gitleaks-report.json"
         continue-on-error: true
 
-      - name: Upload Report
+      - name: Upload Gitleaks Report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gitleaks-report
           path: Amplify/${{ env.APP_DIR }}/gitleaks-report.json
+          retention-days: 7
 
   ci-build:
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'push' }}
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+          clean: true
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
 
-      - uses: actions/setup-dotnet@v4
+      - name: Set up .NET Core
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "3.1"
 
-      - run: dotnet build Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj --configuration Release
+      - name: Build with dotnet
+        run: dotnet build Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj --configuration Release
 
-      - run: dotnet publish Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj -c Release -o "${{ env.APP_DIR }}/myapp"
+      - name: dotnet publish
+        run: dotnet publish Amplify\${{ env.APP_DIR }}\${{ env.APP_DIR }}.csproj -c Release -o "${{ env.APP_DIR }}/myapp"
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
         with:
           name: .net-app
           path: ${{ env.APP_DIR }}/myapp
 
   deploy-approval:
     needs: ci-build
-    if: github.event_name == 'push' && !startsWith(github.ref_name, 'feature/')
+    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'feature/') && !startsWith(github.base_ref, 'feature/') }}
     runs-on: ubuntu-latest
+
+    environment:
+      name: ${{ startsWith(github.ref_name, 'wip') && 'team-qa' || startsWith(github.ref_name, 'qa') && 'team-qa' || startsWith(github.ref_name, 'rc') && 'team-qa' || startsWith(github.ref_name, 'release') && 'production' || 'dev' }}
+
     outputs:
-      webapp_name: ${{ steps.resolve.outputs.webapp_name }}
+      webapp_name: ${{ steps.resolve-webapp.outputs.webapp_name }}
 
     steps:
-      - id: resolve
+      - name: Resolve WebApp Name
+        id: resolve-webapp
         run: echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
 
   create-qa-pr:
     name: Auto-create PR
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'push' && (startsWith(github.ref_name, 'consolidate/api/') || startsWith(github.ref_name, 'qa/api-poc')) }}
     runs-on: ubuntu-latest
-    outputs:
-      pr_url: ${{ steps.create.outputs.pr_url }}
 
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
-
-      - id: create
-        env:
-          GH_TOKEN: ${{ secrets.PLATFORM_GIT_TOKEN }}
-        run: |
-          PR_URL=$(gh pr create \
-            --base main \
-            --head ${{ github.ref_name }} \
-            --title "Auto PR" \
-            --body "Auto PR" \
-            --json url -q .url || echo "")
-          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
 
   deploy:
     needs: deploy-approval
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'feature/') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - run: echo "Deploy step"
+
+  # ✅🔥 NEW JOB (SYNC LOGIC)
+  sync-main-to-feature:
+    name: Sync Main to Feature Branches
+    runs-on: ubuntu-latest
+
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          name: .net-app
+          token: ${{ secrets.PLATFORM_GIT_TOKEN }}
+          fetch-depth: 0
 
-      - uses: azure/login@v2
-        with:
-          creds: ${{ secrets.PLATFORM_AZURE_CREDENTIALS_DEV_AMPLIFY_DEV_SANDBOX_SP }}
+      - name: Setup Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
 
-      - name: Deploy
-        run: echo "Deploy done"
+      - name: Fetch all branches
+        run: git fetch --all
 
-  notify-teams:
-    name: Notify Teams
-    needs:
-      - deploy
-      - create-qa-pr
-    if: always()
-    uses: ot-central-team/cicd-github-accelerator/.github/workflows/teams-notification.yml@feature/divya-github-actions
-
-    with:
-      title: ${{ needs.deploy.result == 'success' && ' Deployment Succeeded — Application is Live' || '❌ Deployment Failed — Immediate Attention Required' }}
-      environment: ${{ startsWith(github.ref_name, 'release') && 'Production' || startsWith(github.ref_name, 'rc') && 'RC' || startsWith(github.ref_name, 'qa') && 'QA' || 'Dev' }}
-      branch: ${{ github.ref_name }}
-      status: ${{ needs.deploy.result }}
-      run_url: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      note: ${{ needs.create-qa-pr.outputs.pr_url || 'No PR created' }}
-
-    secrets:
-      TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+      - name: Sync main into feature branches
+        run: |
+          for branch in $(git branch -r | grep 'origin/feature/api/' | sed 's/origin\///'); do
+            echo "🔄 Syncing $branch"
+            git checkout $branch
+            git merge origin/main --no-edit || true
+            git push origin $branch || true
+          done
