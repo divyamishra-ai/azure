@@ -26,7 +26,6 @@ on:
       - "Amplify/Amplify.WebApi.v1/**"
 
 jobs:
-
   gitleaks-scan:
     name: Secrets Scan
     if: github.event_name == 'pull_request'
@@ -93,7 +92,36 @@ jobs:
     steps:
       - name: Resolve WebApp Name
         id: resolve-webapp
-        run: echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
+        run: |
+          if [[ "${{ github.ref_name }}" == wip/api* ]]; then
+            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
+            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
+          elif [[ "${{ github.ref_name }}" == qa/api* ]]; then
+            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
+            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
+          elif [[ "${{ github.ref_name }}" == rc/api* ]]; then
+            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
+            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
+          elif [[ "${{ github.ref_name }}" == release/api* ]]; then
+            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_OUTPUT
+            echo "webapp_name=app-amp-qa-pltfm-westus-fixapi" >> $GITHUB_ENV
+          else
+            echo "webapp_name=no-deploy-target" >> $GITHUB_OUTPUT
+            echo "webapp_name=no-deploy-target" >> $GITHUB_ENV
+          fi
+
+      - name: Show Deployment Details
+        run: |
+          echo "========================================"
+          echo "🚀 Deployment Details"
+          echo "----------------------------------------"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Environment: ${{ startsWith(github.ref_name, 'wip') && 'team-qa' || startsWith(github.ref_name, 'qa') && 'SIT' || startsWith(github.ref_name, 'rc') && 'staging' || startsWith(github.ref_name, 'release') && 'production' || 'dev' }}"
+          echo "Application Name: ${{ env.APP_DIR }}"
+          echo "Image Name: amplify-webapi-v1"
+          echo "WebApp Name: ${{ env.webapp_name }}"
+          echo "ZIP Artifact: amplify-webapi-v1.zip"
+          echo "========================================"
 
   create-qa-pr:
     name: Auto-create PR
@@ -101,27 +129,79 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
 
+      - name: Resolve Target QA Branch
+        id: resolve-target
+        run: |
+          if [[ "${{ github.ref_name }}" == consolidate/api/* ]]; then
+            echo "target_branch=qa/api-poc" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "${{ github.ref_name }}" == qa/api-poc ]]; then
+            echo "target_branch=rc/api-poc" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create PR to QA
+        env:
+          GH_TOKEN: ${{ secrets.PLATFORM_GIT_TOKEN }}
+        run: |
+          EXISTING_PR=$(gh pr list \
+            --base "${{ steps.resolve-target.outputs.target_branch }}" \
+            --head "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --json number --jq '.[0].number')
+
+          if [[ -n "$EXISTING_PR" ]]; then
+            echo "PR #$EXISTING_PR already exists"
+          else
+            gh pr create \
+              --base "${{ steps.resolve-target.outputs.target_branch }}" \
+              --head "${{ github.ref_name }}" \
+              --title "Auto PR" \
+              --body "Auto PR created"
+          fi
+
   deploy:
     needs: deploy-approval
-    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'feature/') }}
+    if: ${{ github.event_name == 'push' && !startsWith(github.ref_name, 'feature/') && !startsWith(github.base_ref, 'feature/') }}
     runs-on: ubuntu-latest
-    steps:
-      - run: echo "Deploy step"
 
-  # ✅🔥 NEW JOB (SYNC LOGIC)
+    steps:
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: .net-app
+          path: ./myapp
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.PLATFORM_AZURE_CREDENTIALS_DEV_AMPLIFY_DEV_SANDBOX_SP }}
+
+      - name: Deploy to Azure Web App
+        if: ${{ needs.deploy-approval.outputs.webapp_name != 'no-deploy-target' }}
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ needs.deploy-approval.outputs.webapp_name }}
+          package: ./myapp
+
+      - name: Deployment Step Log
+        run: |
+          echo "🚀 Deployed application..."
+
+  # ✅ ONLY NEW ADDITION
   sync-main-to-feature:
     name: Sync Main to Feature Branches
     runs-on: ubuntu-latest
-
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.PLATFORM_GIT_TOKEN }}
