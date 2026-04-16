@@ -17,7 +17,7 @@ on:
 
   push:
     branches:
-      - main   # ✅ ADDED
+      - main 
       - "wip/api/*"
       - "consolidate/api/*"
       - "qa/api-poc*"
@@ -26,6 +26,27 @@ on:
       - "Amplify/Amplify.WebApi.v1/**"
 
 jobs:
+  epic-validation:
+    name: Validate Epic ID in Branch
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Check branch name
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          echo "Checking branch: $BRANCH"
+
+          if [[ "$BRANCH" == feature/* ]]; then
+            if [[ "$BRANCH" != *"epic-"* ]]; then
+              echo "Epic ID missing in feature branch"
+              exit 1
+            else
+              echo "Epic ID found"
+            fi
+          else
+            echo "Not a feature branch, skipping"
+          fi
   gitleaks-scan:
     name: Secrets Scan
     if: github.event_name == 'pull_request'
@@ -125,6 +146,7 @@ jobs:
 
   create-qa-pr:
     name: Auto-create PR
+    needs: epic-validation
     if: ${{ github.event_name == 'push' && (startsWith(github.ref_name, 'consolidate/api/') || startsWith(github.ref_name, 'qa/api-poc')) }}
     runs-on: ubuntu-latest
 
@@ -194,7 +216,6 @@ jobs:
         run: |
           echo "🚀 Deployed application..."
 
-  # ✅ ONLY NEW ADDITION
   sync-main-to-feature:
     name: Sync Main to Feature Branches
     runs-on: ubuntu-latest
